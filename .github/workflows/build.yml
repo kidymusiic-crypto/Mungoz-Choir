@@ -1,0 +1,148 @@
+name: Build plugin
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PLUGIN: Choir Crowd
+
+jobs:
+  # ---------------------------------------------------------------- testes
+  test-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências JUCE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libxext-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCC_COPY_AFTER_BUILD=OFF -DCC_BUILD_TESTS=ON
+          cmake --build build --config Release --parallel
+      - name: Teste de renderização
+        run: ./build/ChoirCrowdTest_artefacts/Release/ChoirCrowdTest
+
+  # ---------------------------------------------------------------- macOS
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versão
+        id: ver
+        run: echo "v=$(sed -nE 's/^project\(ChoirCrowd VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: "Configure (Universal: Apple Silicon + Intel)"
+        run: cmake -B build -G Xcode -DCC_COPY_AFTER_BUILD=OFF -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Validar com pluginval (AU + VST3)
+        run: |
+          curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pv.zip
+          ART="build/ChoirCrowd_artefacts/Release"
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "$ART/AU/$PLUGIN.component" ~/Library/Audio/Plug-Ins/Components/
+          codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/"$PLUGIN.component"
+          killall -9 AudioComponentRegistrar || true
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate "$ART/VST3/$PLUGIN.vst3"
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate ~/Library/Audio/Plug-Ins/Components/"$PLUGIN.component"
+
+      - name: Importar certificados Apple (opcional)
+        env:
+          MAC_CERTS_P12: ${{ secrets.MAC_CERTS_P12 }}
+          MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+        if: env.MAC_CERTS_P12 != ''
+        run: |
+          echo "$MAC_CERTS_P12" | base64 --decode > certs.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import certs.p12 -k build.keychain -P "$MAC_CERTS_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm certs.p12
+
+      - name: Criar instalador .pkg
+        env:
+          MAC_APP_SIGN_ID: ${{ secrets.MAC_APP_SIGN_ID }}
+          MAC_INSTALLER_SIGN_ID: ${{ secrets.MAC_INSTALLER_SIGN_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          mkdir -p out
+          OUT_DIR="$PWD/out" packaging/macos/build_pkg.sh build/ChoirCrowd_artefacts/Release "${{ steps.ver.outputs.v }}"
+          # zip "manual" (para quem prefere copiar os ficheiros à mão)
+          mkdir manual
+          cp -R build/ChoirCrowd_artefacts/Release/AU/*.component build/ChoirCrowd_artefacts/Release/VST3/*.vst3 manual/
+          ditto -c -k --sequesterRsrc --keepParent manual "out/ChoirCrowd-${{ steps.ver.outputs.v }}-macOS-manual.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChoirCrowd-macOS
+          path: out/*
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versão
+        id: ver
+        shell: bash
+        run: echo "v=$(sed -nE 's/^project\(ChoirCrowd VERSION ([0-9.]+)\)/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        run: cmake -B build -A x64 -DCC_COPY_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Validar com pluginval (VST3)
+        shell: bash
+        run: |
+          curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          unzip -q pv.zip
+          ./pluginval.exe --strictness-level 5 --skip-gui-tests --validate "build/ChoirCrowd_artefacts/Release/VST3/$PLUGIN.vst3"
+
+      - name: Criar instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+            $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          iscc /DAppVersion=${{ steps.ver.outputs.v }} /DArtefacts="$PWD\build\ChoirCrowd_artefacts\Release" packaging\windows\ChoirCrowd.iss
+          Compress-Archive -Path "build\ChoirCrowd_artefacts\Release\VST3\*" -DestinationPath "out\ChoirCrowd-${{ steps.ver.outputs.v }}-Windows-VST3-manual.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChoirCrowd-Windows
+          path: out/*
+
+  # ---------------------------------------------------------------- Release
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

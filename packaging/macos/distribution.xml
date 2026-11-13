@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Choir Crowd __VERSION__</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_localSystem="true"/>
+    <os-version min="11.0"/>
+
+    <choices-outline>
+        <line choice="au"/>
+        <line choice="vst3"/>
+        <line choice="standalone"/>
+    </choices-outline>
+
+    <choice id="au" title="Audio Unit (Logic Pro, GarageBand, MainStage)"
+            description="Instala em /Library/Audio/Plug-Ins/Components">
+        <pkg-ref id="com.logogueto.choircrowd.au"/>
+    </choice>
+    <choice id="vst3" title="VST3 (Ableton, FL Studio, Cubase, Studio One, Reaper, Bitwig...)"
+            description="Instala em /Library/Audio/Plug-Ins/VST3">
+        <pkg-ref id="com.logogueto.choircrowd.vst3"/>
+    </choice>
+    <choice id="standalone" title="Aplicação Standalone"
+            description="Instala em /Applications (toca sem DAW)">
+        <pkg-ref id="com.logogueto.choircrowd.standalone"/>
+    </choice>
+
+    <pkg-ref id="com.logogueto.choircrowd.au" version="__VERSION__">au.pkg</pkg-ref>
+    <pkg-ref id="com.logogueto.choircrowd.vst3" version="__VERSION__">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.logogueto.choircrowd.standalone" version="__VERSION__">standalone.pkg</pkg-ref>
+</installer-gui-script>

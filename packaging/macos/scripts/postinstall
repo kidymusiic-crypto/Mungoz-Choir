@@ -1,0 +1,9 @@
+#!/bin/sh
+# Remove quarentena e força o macOS a re-ler a lista de Audio Units.
+for p in "/Library/Audio/Plug-Ins/Components/Choir Crowd.component" \
+         "/Library/Audio/Plug-Ins/VST3/Choir Crowd.vst3" \
+         "/Applications/Choir Crowd.app"; do
+  [ -e "$p" ] && xattr -cr "$p" 2>/dev/null
+done
+killall -9 AudioComponentRegistrar 2>/dev/null
+exit 0
