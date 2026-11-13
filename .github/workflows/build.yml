@@ -85,6 +85,33 @@ jobs:
           cp -R build/ChoirCrowd_artefacts/Release/AU/*.component build/ChoirCrowd_artefacts/Release/VST3/*.vst3 manual/
           ditto -c -k --sequesterRsrc --keepParent manual "out/ChoirCrowd-${{ steps.ver.outputs.v }}-macOS-manual.zip"
 
+      - name: "Testar instalador .pkg (instala, verifica arm64+x86_64, valida, abre a app)"
+        run: |
+          set -e
+          PKG=$(ls out/*.pkg)
+          pkgutil --check-signature "$PKG" || true
+          sudo installer -pkg "$PKG" -target /
+          AU="/Library/Audio/Plug-Ins/Components/$PLUGIN.component"
+          VST="/Library/Audio/Plug-Ins/VST3/$PLUGIN.vst3"
+          APP="/Applications/$PLUGIN.app"
+          for b in "$AU" "$VST" "$APP"; do
+            test -d "$b" || { echo "FALTA: $b"; exit 1; }
+            BIN="$b/Contents/MacOS/$PLUGIN"
+            ARCHS=$(lipo -archs "$BIN")
+            echo "$b -> $ARCHS"
+            [[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] || { echo "Não é Universal"; exit 1; }
+            codesign --verify --deep --strict "$b"
+          done
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aumu Chcr Lgue
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate "$VST"
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate "$AU"
+          # Standalone: abre e confirma que continua a correr após 10 s (sem crash)
+          "$APP/Contents/MacOS/$PLUGIN" & PID=$!
+          sleep 10
+          kill -0 $PID && echo "Standalone OK (a correr)" && kill $PID
+
       - uses: actions/upload-artifact@v4
         with:
           name: ChoirCrowd-macOS
@@ -124,6 +151,23 @@ jobs:
           }
           iscc /DAppVersion=${{ steps.ver.outputs.v }} /DArtefacts="$PWD\build\ChoirCrowd_artefacts\Release" packaging\windows\ChoirCrowd.iss
           Compress-Archive -Path "build\ChoirCrowd_artefacts\Release\VST3\*" -DestinationPath "out\ChoirCrowd-${{ steps.ver.outputs.v }}-Windows-VST3-manual.zip"
+
+      - name: Testar instalador (instala em silêncio, verifica e valida)
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem out\*-Setup.exe).FullName
+          Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $vst = "$env:CommonProgramFiles\VST3\Choir Crowd.vst3"
+          $exe = "$env:ProgramFiles\Logogueto\Choir Crowd\Choir Crowd.exe"
+          if (-not (Test-Path "$vst\Contents\x86_64-win\Choir Crowd.vst3")) { throw "VST3 não instalado" }
+          if (-not (Test-Path $exe)) { throw "Standalone não instalado" }
+          .\pluginval.exe --strictness-level 5 --skip-gui-tests --validate "$vst" | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "pluginval falhou" }
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep 10
+          if ($p.HasExited) { throw "Standalone fechou/crashou" }
+          Stop-Process $p.Id
+          Write-Host "Instalador Windows OK"
 
       - uses: actions/upload-artifact@v4
         with:
