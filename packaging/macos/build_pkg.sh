@@ -53,7 +53,7 @@ SIGN_ARGS=()
 productbuild --distribution "$WORK/distribution.xml" \
              --package-path "$WORK" \
              --resources "$WORK/resources" \
-             "${SIGN_ARGS[@]}" \
+             ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
              "$OUT"
 
 if [[ -n "${MAC_INSTALLER_SIGN_ID:-}" && -n "${APPLE_ID:-}" ]]; then
